@@ -1,0 +1,370 @@
+# Instincts generated from https://github.com/0xSoftBoi/microprediction
+# Generated: 2026-07-01T20:54:21.673Z
+# Version: 2.0
+# NOTE: This file supplements (does not replace) any existing curated instincts.
+# High-confidence manually curated instincts should be preserved alongside these.
+
+---
+id: microprediction-commit-length
+trigger: "when writing a commit message"
+confidence: 0.6
+domain: git
+source: repo-analysis
+source_repo: https://github.com/0xSoftBoi/microprediction
+---
+
+# Microprediction Commit Length
+
+## Action
+
+Write moderate-length commit messages (~57 characters)
+
+## Evidence
+
+- Average commit message length: 57 chars
+- Based on 5 commits
+
+---
+id: microprediction-naming-files
+trigger: "when creating a new file"
+confidence: 0.8
+domain: code-style
+source: repo-analysis
+source_repo: https://github.com/0xSoftBoi/microprediction
+---
+
+# Microprediction Naming Files
+
+## Action
+
+Use camelCase naming convention
+
+## Evidence
+
+- Analyzed file naming patterns in repository
+- Dominant pattern: camelCase
+
+---
+id: microprediction-import-relative
+trigger: "when importing modules"
+confidence: 0.75
+domain: code-style
+source: repo-analysis
+source_repo: https://github.com/0xSoftBoi/microprediction
+---
+
+# Microprediction Import Relative
+
+## Action
+
+Use relative imports for project files
+
+## Evidence
+
+- Import analysis shows relative import pattern
+- Example: import { x } from '../lib/x'
+
+---
+id: microprediction-export-style
+trigger: "when exporting from a module"
+confidence: 0.7
+domain: code-style
+source: repo-analysis
+source_repo: https://github.com/0xSoftBoi/microprediction
+---
+
+# Microprediction Export Style
+
+## Action
+
+Prefer named exports
+
+## Evidence
+
+- Export pattern analysis
+- Dominant style: named
+
+---
+id: microprediction-test-separate
+trigger: "when writing tests"
+confidence: 0.8
+domain: testing
+source: repo-analysis
+source_repo: https://github.com/0xSoftBoi/microprediction
+---
+
+# Microprediction Test Separate
+
+## Action
+
+Place tests in the tests/ or __tests__/ directory, mirroring src structure
+
+## Evidence
+
+- Separate test directory pattern detected
+- Tests live in dedicated test folders
+
+---
+id: microprediction-workflow-platform-starter-kit-development
+trigger: "when doing platform starter kit development"
+confidence: 0.6
+domain: workflow
+source: repo-analysis
+source_repo: https://github.com/0xSoftBoi/microprediction
+---
+
+# Microprediction Workflow Platform Starter Kit Development
+
+## Action
+
+Follow the platform-starter-kit-development workflow:
+1. Create a new subdirectory under explorations/build_on_both/ for the platform.
+2. Add main implementation file(s) (e.g., main.py, submit.py).
+3. Add requirements.txt for dependencies.
+4. Update or create README.md with platform comparison, instructions, and methodology.
+5. Verify code runs end-to-end or compiles.
+
+## Evidence
+
+- Workflow detected from commit patterns
+- Frequency: ~2x per month
+- Files: explorations/build_on_both/<platform>/*.py, explorations/build_on_both/<platform>/requirements.txt, explorations/build_on_both/README.md
+
+---
+id: microprediction-workflow-platform-starter-kit-extension
+trigger: "when doing platform starter kit extension"
+confidence: 0.6
+domain: workflow
+source: repo-analysis
+source_repo: https://github.com/0xSoftBoi/microprediction
+---
+
+# Microprediction Workflow Platform Starter Kit Extension
+
+## Action
+
+Follow the platform-starter-kit-extension workflow:
+1. Edit or upgrade main implementation file(s) in the platform directory.
+2. Add new utility or helper files (e.g., streaming_attacker.py, cv.py).
+3. Update requirements.txt if new dependencies are introduced.
+4. Update README.md to document new features or changes.
+5. Verify all files run or compile.
+
+## Evidence
+
+- Workflow detected from commit patterns
+- Frequency: ~2x per month
+- Files: explorations/build_on_both/<platform>/*.py, explorations/build_on_both/<platform>/requirements.txt, explorations/build_on_both/README.md
+
+---
+id: microprediction-instinct-file-naming-camelCase
+trigger: "When creating a new Python file"
+confidence: 0.85
+domain: code-style
+source: repo-analysis
+source_repo: 0xSoftBoi/microprediction
+---
+
+# Microprediction Instinct File Naming CamelCase
+
+## Action
+
+Name the file using camelCase (e.g., streamingAttacker.py)
+
+## Evidence
+
+- Pattern in namingConventions.files: camelCase
+
+---
+id: microprediction-instinct-function-naming-camelCase
+trigger: "When defining a new function"
+confidence: 0.85
+domain: code-style
+source: repo-analysis
+source_repo: 0xSoftBoi/microprediction
+---
+
+# Microprediction Instinct Function Naming CamelCase
+
+## Action
+
+Name the function using camelCase (e.g., makeEraScores)
+
+## Evidence
+
+- Pattern in namingConventions.functions: camelCase
+
+---
+id: microprediction-instinct-class-naming-pascalCase
+trigger: "When defining a new class"
+confidence: 0.85
+domain: code-style
+source: repo-analysis
+source_repo: 0xSoftBoi/microprediction
+---
+
+# Microprediction Instinct Class Naming PascalCase
+
+## Action
+
+Name the class using PascalCase (e.g., EraScorer)
+
+## Evidence
+
+- Pattern in namingConventions.classes: PascalCase
+
+---
+id: microprediction-instinct-constant-naming-screamingSnakeCase
+trigger: "When defining a constant"
+confidence: 0.85
+domain: code-style
+source: repo-analysis
+source_repo: 0xSoftBoi/microprediction
+---
+
+# Microprediction Instinct Constant Naming ScreamingSnakeCase
+
+## Action
+
+Name the constant using SCREAMING_SNAKE_CASE
+
+## Evidence
+
+- Pattern in namingConventions.constants: SCREAMING_SNAKE_CASE
+
+---
+id: microprediction-instinct-import-style-relative
+trigger: "When importing modules within the package"
+confidence: 0.8
+domain: code-style
+source: repo-analysis
+source_repo: 0xSoftBoi/microprediction
+---
+
+# Microprediction Instinct Import Style Relative
+
+## Action
+
+Use relative imports
+
+## Evidence
+
+- Pattern in importStyle: relative
+
+---
+id: microprediction-instinct-export-style-named
+trigger: "When exporting functions or classes from a module"
+confidence: 0.8
+domain: code-style
+source: repo-analysis
+source_repo: 0xSoftBoi/microprediction
+---
+
+# Microprediction Instinct Export Style Named
+
+## Action
+
+Use named exports
+
+## Evidence
+
+- Pattern in exportStyle: named
+
+---
+id: microprediction-instinct-test-location-separate
+trigger: "When adding new tests"
+confidence: 0.8
+domain: testing
+source: repo-analysis
+source_repo: 0xSoftBoi/microprediction
+---
+
+# Microprediction Instinct Test Location Separate
+
+## Action
+
+Place test files in a separate directory from source code
+
+## Evidence
+
+- Pattern in architecture.testLocation: separate
+
+---
+id: microprediction-instinct-git-commit-freeform
+trigger: "When writing a commit message"
+confidence: 0.8
+domain: git
+source: repo-analysis
+source_repo: 0xSoftBoi/microprediction
+---
+
+# Microprediction Instinct Git Commit Freeform
+
+## Action
+
+Write a concise, freeform message describing the change (no strict prefix required)
+
+## Evidence
+
+- Pattern in commits.type: freeform
+- Examples: 'Add first-principles rethink research memo'
+
+---
+id: microprediction-instinct-git-commit-length
+trigger: "When writing a commit message"
+confidence: 0.7
+domain: git
+source: repo-analysis
+source_repo: 0xSoftBoi/microprediction
+---
+
+# Microprediction Instinct Git Commit Length
+
+## Action
+
+Keep the commit message concise, typically under 60 characters
+
+## Evidence
+
+- Pattern in commits.averageLength: 57
+
+---
+id: microprediction-instinct-platform-starter-kit-development
+trigger: "When someone wants to add a new platform integration or example pipeline"
+confidence: 0.92
+domain: workflow
+source: repo-analysis
+source_repo: 0xSoftBoi/microprediction
+---
+
+# Microprediction Instinct Platform Starter Kit Development
+
+## Action
+
+Create a new subdirectory under explorations/build_on_both/ for the platform, add main implementation file(s), requirements.txt, and README.md, then verify code runs end-to-end
+
+## Evidence
+
+- Workflow: platform-starter-kit-development
+- Example commit sequence
+
+---
+id: microprediction-instinct-platform-starter-kit-extension
+trigger: "When someone wants to add new modeling approaches, validation logic, or utilities to an existing platform starter kit"
+confidence: 0.9
+domain: workflow
+source: repo-analysis
+source_repo: 0xSoftBoi/microprediction
+---
+
+# Microprediction Instinct Platform Starter Kit Extension
+
+## Action
+
+Edit or upgrade main implementation file(s), add new utilities, update requirements.txt and README.md, then verify all files run or compile
+
+## Evidence
+
+- Workflow: platform-starter-kit-extension
+- Example commit sequence
+

@@ -1,0 +1,6 @@
+interface:
+  display_name: "Microprediction"
+  short_description: "Repo-specific patterns and workflows for microprediction"
+  default_prompt: "Use the microprediction repo skill to follow existing architecture, testing, and workflow conventions."
+policy:
+  allow_implicit_invocation: true

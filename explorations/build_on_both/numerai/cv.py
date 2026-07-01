@@ -69,9 +69,13 @@ def numerai_corr(preds: pd.Series, target: pd.Series) -> float:
 def era_scores(preds: pd.Series, target: pd.Series, eras: pd.Series) -> pd.Series:
     """Per-era Numerai CORR."""
     df = pd.DataFrame({"p": preds.to_numpy(), "t": target.to_numpy(), "era": eras.to_numpy()})
-    return df.groupby("era").apply(
-        lambda g: numerai_corr(g["p"].reset_index(drop=True), g["t"].reset_index(drop=True))
-    )
+    # Iterate groups explicitly so this stays correct across pandas versions
+    # (groupby.apply on the grouping column is deprecated in pandas >=2.2).
+    scores = {
+        era: numerai_corr(g["p"].reset_index(drop=True), g["t"].reset_index(drop=True))
+        for era, g in df.groupby("era")
+    }
+    return pd.Series(scores)
 
 
 def summarize(scores: pd.Series) -> dict:

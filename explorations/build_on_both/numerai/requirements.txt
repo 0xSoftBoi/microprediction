@@ -1,0 +1,6 @@
+numerapi>=2.23.0
+lightgbm
+cloudpickle
+pandas
+numpy
+pyarrow

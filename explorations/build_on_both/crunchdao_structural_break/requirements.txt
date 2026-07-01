@@ -7,3 +7,5 @@ scipy
 scikit-learn
 joblib
 lightgbm
+# Optional: for streaming_attacker.py (Real-Time edition)
+# midone

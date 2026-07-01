@@ -38,37 +38,53 @@ import joblib
 from scipy import stats
 from scipy.spatial.distance import jensenshannon
 
-# Gradient booster: prefer LightGBM (standard on the platform); fall back to
-# sklearn's HistGradientBoosting so the file runs even without lightgbm installed.
-try:
-    from lightgbm import LGBMClassifier
+from sklearn.ensemble import (
+    HistGradientBoostingClassifier,
+    RandomForestClassifier,
+    StackingClassifier,
+)
+from sklearn.linear_model import LogisticRegression
 
-    def _make_model():
-        return LGBMClassifier(
-            n_estimators=400,
-            learning_rate=0.03,
-            num_leaves=31,
-            subsample=0.8,
-            colsample_bytree=0.8,
-            min_child_samples=40,
-            random_state=0,
-            n_jobs=-1,
-            deterministic=True,
-            force_row_wise=True,
-            verbose=-1,
-        )
-except Exception:  # pragma: no cover - fallback path
-    from sklearn.ensemble import HistGradientBoostingClassifier
 
-    def _make_model():
-        return HistGradientBoostingClassifier(
-            max_iter=400,
-            learning_rate=0.03,
-            max_leaf_nodes=31,
-            min_samples_leaf=40,
-            l2_regularization=1.0,
-            random_state=0,
-        )
+def _base_estimators():
+    """Diverse, regularized base learners. LightGBM is added when available."""
+    estimators = [
+        ("hgb", HistGradientBoostingClassifier(
+            max_iter=300, learning_rate=0.05, max_leaf_nodes=31,
+            min_samples_leaf=40, l2_regularization=1.0, random_state=0)),
+        ("rf", RandomForestClassifier(
+            n_estimators=300, max_depth=8, min_samples_leaf=20,
+            n_jobs=-1, random_state=0)),
+    ]
+    try:
+        from lightgbm import LGBMClassifier
+
+        estimators.insert(0, ("lgbm", LGBMClassifier(
+            n_estimators=400, learning_rate=0.03, num_leaves=31,
+            subsample=0.8, colsample_bytree=0.8, min_child_samples=40,
+            random_state=0, n_jobs=-1, deterministic=True,
+            force_row_wise=True, verbose=-1)))
+    except Exception:
+        pass
+    return estimators
+
+
+def _make_model():
+    """Stacked ensemble -> logistic meta-learner.
+
+    Mirrors the published winning solutions (XGB/RF/LGBM stack) while staying
+    runnable without lightgbm installed. Stacking with an out-of-fold meta-learner
+    guards against any single base model overfitting one distribution family — the
+    failure mode the independent benchmark flagged (top models fell 5+ ranks on a
+    second dataset).
+    """
+    return StackingClassifier(
+        estimators=_base_estimators(),
+        final_estimator=LogisticRegression(max_iter=1000),
+        stack_method="predict_proba",
+        cv=5,
+        n_jobs=-1,
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -83,6 +99,7 @@ FEATURE_NAMES = [
     "ks_stat", "wasserstein", "energy_dist", "ad_stat", "js_dist",
     "skew_diff", "kurt_diff", "tail_range_ratio",
     "acf1_diff", "slope_diff", "vol_shift", "cusum_max",
+    "spec_centroid_diff", "lowband_frac_diff",
 ]
 
 
@@ -98,6 +115,21 @@ def _acf1(x: np.ndarray) -> float:
     if denom <= 0:
         return 0.0
     return _safe(np.dot(x[:-1], x[1:]) / denom)
+
+
+def _spectrum_stats(x: np.ndarray) -> tuple[float, float]:
+    """Spectral centroid and low-frequency energy fraction of a segment."""
+    if x.size < 8:
+        return 0.0, 0.0
+    x = x - x.mean()
+    ps = np.abs(np.fft.rfft(x)) ** 2
+    total = ps.sum()
+    if total <= 0:
+        return 0.0, 0.0
+    freqs = np.fft.rfftfreq(x.size)
+    centroid = float((freqs * ps).sum() / total)
+    lowband_frac = float(ps[freqs <= 0.1].sum() / total)
+    return centroid, lowband_frac
 
 
 def _slope(x: np.ndarray) -> float:
@@ -202,6 +234,12 @@ def extract_features(dataset: pd.DataFrame) -> np.ndarray:
     cusum = np.cumsum(full - full.mean())
     feats["cusum_max"] = _safe(np.max(np.abs(cusum)) / (fstd * np.sqrt(full.size)))
 
+    # Spectral shift (change in frequency content before vs after)
+    ca, la = _spectrum_stats(a)
+    cb, lb = _spectrum_stats(b)
+    feats["spec_centroid_diff"] = _safe(cb - ca)
+    feats["lowband_frac_diff"] = _safe(lb - la)
+
     return np.array([feats[k] for k in FEATURE_NAMES], dtype=float)
 
 
@@ -272,15 +310,20 @@ if __name__ == "__main__":
     y = pd.Series(labels, name="structural_breakpoint")
     y.index.name = "id"
 
+    # Honest estimate: 5-fold CV ROC AUC on the feature matrix.
+    from sklearn.model_selection import cross_val_score
+    Xmat, ids = _features_for_all(X)
+    yv = y.loc[ids].astype(int).to_numpy()
+    cv_auc = cross_val_score(_make_model(), Xmat, yv, cv=5, scoring="roc_auc").mean()
+    print(f"5-fold CV ROC AUC on synthetic data: {cv_auc:.3f}")
+
+    # Also exercise the exact train()/infer() generator contract end to end.
     os.makedirs("resources", exist_ok=True)
     train(X, y, "resources")
-
     test_ids = list(range(200))
-    stream = (X.loc[[i]] for i in test_ids)
-    gen = infer(stream, "resources")
+    gen = infer((X.loc[[i]] for i in test_ids), "resources")
     next(gen)  # consume readiness handshake
     scores = np.array([next(gen) for _ in test_ids])
-
-    truth = np.array([labels[i] for i in test_ids])
     from sklearn.metrics import roc_auc_score
-    print(f"in-sample ROC AUC (sanity check): {roc_auc_score(truth, scores):.3f}")
+    truth = np.array([labels[i] for i in test_ids])
+    print(f"in-sample ROC AUC (contract check): {roc_auc_score(truth, scores):.3f}")

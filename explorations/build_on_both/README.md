@@ -34,12 +34,20 @@ source — otherwise you're doing data engineering, not modeling.
 
 ## 1. CrunchDAO — Structural Break  (`crunchdao_structural_break/`)
 
-**What's here:** `main.py` — a complete `train()`/`infer()` submission that beats
-the shipped t-test baseline. It extracts a **battery of two-sample before/after
-statistics** (KS, Mann–Whitney, Welch t, Levene, Wasserstein, energy distance,
-Anderson–Darling, Jensen–Shannon, autocorrelation/slope/variance shifts, CUSUM,
-moment differences) and learns to weight them with a gradient-boosted classifier
-on the provided labels.
+**What's here:**
+- `main.py` — a complete `train()`/`infer()` submission for the batch **Open
+  Benchmark**. It extracts a **battery of two-sample before/after statistics** (KS,
+  Mann–Whitney, Welch t, Levene, Wasserstein, energy distance, Anderson–Darling,
+  Jensen–Shannon, autocorrelation/slope/variance shifts, CUSUM, spectral centroid
+  & low-band energy shifts, moment differences) and weights them with a **stacked
+  ensemble** (LightGBM + RandomForest + HistGradientBoosting → logistic
+  meta-learner). Stacking guards against any single base model overfitting one
+  distribution family — the exact failure mode the independent benchmark flagged.
+- `streaming_attacker.py` — a **`BreakAttacker`** for the separate $100k **Real-Time
+  (streaming) edition**, where points arrive one at a time. It combines an online
+  CUSUM with a conformal-style betting martingale into a monotone break score, and
+  subclasses Cotton's `midone` `Attacker` when installed (falls back to a
+  self-contained base so it runs anywhere).
 
 **Why this design:** the published winning solutions and an independent 25-method
 benchmark all converge on the same recipe — **engineered two-sample features →
@@ -54,7 +62,8 @@ to reach for a foundation model here — GBDT-on-features is the right tool.
 ```bash
 cd crunchdao_structural_break
 pip install numpy scipy scikit-learn pandas joblib   # lightgbm optional
-python main.py        # synthesises break/no-break series, prints a sanity AUC
+python main.py               # batch detector: prints 5-fold CV + contract-check AUC
+python streaming_attacker.py # streaming detector self-test (pip install midone for real use)
 ```
 
 **Submit for real:**
@@ -68,42 +77,43 @@ crunch test            # local dry run against provided data
 crunch push -m "two-sample features + GBDT"
 ```
 
-**Improve from here (in rough ROI order):** add Jensen–Shannon/Hellinger on more
-bins, spectral (FFT/PSD) and wavelet (PyWavelets) features; stack XGBoost + RF +
-LightGBM; tune regularization for the *worst* fold, not the mean (the benchmark's
-top models overfit and fell 5+ ranks on a second dataset). For the separate
-**2026 streaming "Real-Time Edition"**, this batch approach doesn't apply — that's
-where online **conformal test martingales** and Cotton's **`midone`** `Attacker`
-(`pip install midone`) become first-class.
+**Improve from here (in rough ROI order):** add wavelet (PyWavelets) features and
+`tabpfn`-generated features (the 2nd-place solution used both); add XGBoost to the
+stack; tune regularization for the *worst* fold, not the mean (the benchmark's top
+models overfit and fell 5+ ranks on a second dataset); do SHAP-based feature
+selection. The streaming edition's `BreakAttacker` can be upgraded with a proper
+inductive conformal predictor fit on the reference window.
 
 ---
 
 ## 2. Numerai — Classic  (`numerai/`)
 
-**What's here:** `submit.py` — downloads the current v5 ("Atlas") data, trains a
-LightGBM regressor on the small feature set predicting the Cyrus target, applies
-optional **feature neutralization** (orthogonalize predictions against features so
-you're rewarded for signal, not raw feature exposure — the same "reward the
-orthogonal component" theme as CrunchDAO/Numerai's contribution metrics), and
-packages a `predict(live_features, live_benchmark_models)` function that Numerai's
-**Model Upload** runs for you every round.
+**What's here:**
+- `submit.py` — downloads v5 ("Atlas") data, trains one LightGBM **per target and
+  blends them rank-averaged** (Numerai's own flagship `V5_LGBM_CT_BLEND` pattern =
+  Cyrus + Teager), applies optional **feature neutralization** (reward signal, not
+  raw feature exposure), and packages a `predict()` for **Model Upload** (Numerai
+  runs it every round). A `--cv` flag runs proper era-wise CV before you commit.
+- `cv.py` — a reusable **`TimeSeriesSplitGroups`** (walk-forward, era-atomic,
+  purged) plus the official **`numerai_corr`** transform and per-era Sharpe scoring.
+  Random K-fold *leaks* on Numerai (correlated eras, forward-looking targets); this
+  is the correct validation.
 
 **Run it:**
 ```bash
 cd numerai
 pip install -r requirements.txt
-python submit.py                 # download → train → write predict.pkl
+python submit.py --cv            # download → era-wise CV report (trust before you stake)
+python submit.py                 # download → train blend → write predict.pkl
 # then, with a model created at numer.ai and API keys in env:
 NUMERAI_PUBLIC_ID=... NUMERAI_SECRET_KEY=... NUMERAI_MODEL_ID=... \
   python submit.py --upload
 ```
 
-**Improve from here:** ensemble across targets (e.g. Cyrus + Teager, rank-averaged
-— this is literally Numerai's own flagship `V5_LGBM_CT_BLEND`); tune neutralization
-proportion (~0.5–1.0) against **FNCv3**; validate **era-wise** (each era is one
-atomic unit; never random-split — targets are forward-looking and leak) with
-purge between train/test. Scale the LightGBM up (official large config:
-`n_estimators=20000, lr=0.001, max_depth=6, num_leaves=64, colsample_bytree=0.1`).
+**Improve from here:** tune neutralization proportion (~0.5–1.0) against **FNCv3**;
+add more targets to the blend; scale the LightGBM up (official large config:
+`n_estimators=20000, lr=0.001, max_depth=6, num_leaves=64, colsample_bytree=0.1`);
+weight the blend by validation Sharpe rather than equally.
 
 ---
 

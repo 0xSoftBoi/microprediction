@@ -1,30 +1,30 @@
 """
-Numerai Classic — first-model starter (download → train → model-upload).
+Numerai Classic — starter (download -> era-wise CV -> multi-target blend -> upload).
 
 What this does
 --------------
 1. Downloads the current v5 ("Atlas") data with numerapi (small feature set).
-2. Trains a LightGBM regressor on the primary `target` (Cyrus 20-day).
-3. Optionally reduces feature exposure via feature neutralization (RETHINK.md's
-   "reward orthogonal signal" idea — here, orthogonalize predictions against the
-   features so you're not just re-selling raw feature exposure).
-4. Wraps it in the `predict(live_features, live_benchmark_models)` function that
-   Numerai's "Model Upload" flow runs for you every round, and cloudpickles it.
+2. Trains a LightGBM model per target and BLENDS them (rank-averaged) — this is
+   Numerai's own flagship pattern (`V5_LGBM_CT_BLEND` = Cyrus + Teager). Blending
+   across targets diversifies which residual return you predict and improves
+   out-of-sample consistency.
+3. Optional feature neutralization (orthogonalize predictions vs features so you
+   are rewarded for signal, not raw feature exposure).
+4. `--cv` runs proper ERA-WISE cross-validation (never random K-fold) and reports
+   mean per-era CORR + Sharpe, so you can trust a change before staking.
+5. Packages a `predict(live_features, live_benchmark_models)` for Model Upload,
+   which Numerai runs for you every round.
 
-Notes verified against docs.numer.ai (2026):
-- Data version string advances over time; confirm the current one via
-  `napi.list_datasets()` or the Data page. `v5.2` is current at time of writing.
-- Only *ranks per era* matter for scoring (Numerai Corr), so absolute prediction
-  scale is irrelevant.
-- Model Upload and manual CSV upload are mutually exclusive per model slot.
-- Payouts (2026): 0.75*CORR + 2.25*MMC, capped at +/-5% of stake per round.
-  Staking is optional — run unstaked first.
+Verified vs docs.numer.ai (2026): confirm the current version string via
+`napi.list_datasets()`; only per-era ranks matter; Model Upload and manual upload
+are mutually exclusive per model slot; payouts 0.75*CORR + 2.25*MMC, +/-5%/round.
 
 Usage:
     pip install -r requirements.txt
-    # set NUMERAI_PUBLIC_ID / NUMERAI_SECRET_KEY and NUMERAI_MODEL_ID to upload
-    python submit.py --upload      # build, cloudpickle, and model-upload
-    python submit.py               # build + save predict.pkl only (no upload)
+    python submit.py --cv          # download + era-wise CV report (no upload)
+    python submit.py               # build predict.pkl
+    NUMERAI_PUBLIC_ID=... NUMERAI_SECRET_KEY=... NUMERAI_MODEL_ID=... \
+        python submit.py --upload  # build + model-upload
 """
 
 from __future__ import annotations
@@ -37,27 +37,24 @@ import numpy as np
 import pandas as pd
 from numerapi import NumerAPI
 
+import cv as cvmod
+
 DATA_VERSION = "v5.2"            # confirm current via napi.list_datasets()
 FEATURE_SET = "small"           # "small" (~42) to start; "medium"/"all" later
-TARGET = "target"               # alias of the Cyrus 20-day payout target
+# Primary payout target + a diversifier. Any missing target is skipped gracefully.
+TARGETS = ["target", "target_teager2b_20", "target_cyrusd_20"]
 NEUTRALIZE_PROPORTION = 0.5     # 0.0 = none, 1.0 = full feature neutralization
 
 
 def _lgbm():
     from lightgbm import LGBMRegressor
 
-    # Community "fast to iterate" config; swap to the official large config
+    # Fast-to-iterate config; scale up to the official large config
     # (n_estimators=20000, learning_rate=0.001, max_depth=6, num_leaves=64,
-    #  colsample_bytree=0.1) once you are ready to spend the compute.
+    #  colsample_bytree=0.1) once you're ready to spend the compute.
     return LGBMRegressor(
-        n_estimators=2000,
-        learning_rate=0.01,
-        max_depth=5,
-        num_leaves=31,
-        colsample_bytree=0.1,
-        random_state=0,
-        n_jobs=-1,
-        verbose=-1,
+        n_estimators=2000, learning_rate=0.01, max_depth=5, num_leaves=31,
+        colsample_bytree=0.1, random_state=0, n_jobs=-1, verbose=-1,
     )
 
 
@@ -68,27 +65,40 @@ def neutralize(predictions: pd.Series, features: pd.DataFrame, proportion: float
     f = features.to_numpy(dtype=np.float32)
     p = predictions.to_numpy(dtype=np.float32).reshape(-1, 1)
     exposure = f @ np.linalg.pinv(f) @ p
-    residual = p - proportion * exposure
-    out = residual.ravel()
+    out = (p - proportion * exposure).ravel()
     out = (out - out.mean()) / (out.std() + 1e-12)
     return pd.Series(out, index=predictions.index)
 
 
-def build_predict_fn(model, features: list[str]):
-    """Return the predict() function Numerai will run each round."""
+def _blend(models: dict, features_df: pd.DataFrame, features: list[str]) -> pd.Series:
+    """Rank-average predictions from each per-target model (ranks are all that count)."""
+    ranks = [
+        pd.Series(m.predict(features_df[features]), index=features_df.index).rank(pct=True)
+        for m in models.values()
+    ]
+    return sum(ranks) / len(ranks)
+
+
+def build_predict_fn(models: dict, features: list[str]):
+    """Return the predict() function Numerai runs each round."""
 
     def predict(live_features: pd.DataFrame, live_benchmark_models: pd.DataFrame) -> pd.DataFrame:
-        raw = pd.Series(model.predict(live_features[features]), index=live_features.index)
+        blended = _blend(models, live_features, features)
         if NEUTRALIZE_PROPORTION > 0:
-            raw = neutralize(raw, live_features[features], NEUTRALIZE_PROPORTION)
-        # Rank to (0,1) — only order matters, and this guarantees a valid range.
-        ranked = raw.rank(pct=True)
-        return ranked.to_frame("prediction")
+            blended = neutralize(blended, live_features[features], NEUTRALIZE_PROPORTION)
+        return blended.rank(pct=True).to_frame("prediction")
 
     return predict
 
 
-def main(upload: bool) -> None:
+def _available_targets(path: str) -> list[str]:
+    import pyarrow.parquet as pq
+    cols = set(pq.ParquetFile(path).schema.names)
+    present = [t for t in TARGETS if t in cols]
+    return present or ["target"]
+
+
+def main(upload: bool, run_cv: bool) -> None:
     napi = NumerAPI()
 
     print(f"Downloading {DATA_VERSION} data ({FEATURE_SET} feature set)...")
@@ -98,17 +108,25 @@ def main(upload: bool) -> None:
     with open(f"{DATA_VERSION}/features.json") as fh:
         features = json.load(fh)["feature_sets"][FEATURE_SET]
 
-    train = pd.read_parquet(
-        f"{DATA_VERSION}/train.parquet", columns=["era", TARGET] + features
-    ).dropna(subset=[TARGET])
+    train_path = f"{DATA_VERSION}/train.parquet"
+    targets = _available_targets(train_path)
+    print(f"Targets to blend: {targets}")
 
-    print(f"Training LightGBM on {len(features)} features, {len(train):,} rows...")
-    model = _lgbm()
-    model.fit(train[features], train[TARGET])
+    train = pd.read_parquet(train_path, columns=["era"] + targets + features)
 
-    predict = build_predict_fn(model, features)
+    if run_cv:
+        _era_wise_cv(train, features, targets[0])
 
-    # Sanity-check the predict fn on a slice of training features.
+    print(f"Training {len(targets)} model(s) on {len(features)} features...")
+    models = {}
+    for tgt in targets:
+        sub = train.dropna(subset=[tgt])
+        m = _lgbm()
+        m.fit(sub[features], sub[tgt])
+        models[tgt] = m
+
+    predict = build_predict_fn(models, features)
+
     sample = train[features].head(1000)
     demo = predict(sample, pd.DataFrame(index=sample.index))
     assert list(demo.columns) == ["prediction"]
@@ -122,20 +140,41 @@ def main(upload: bool) -> None:
     print("Wrote predict.pkl")
 
     if upload:
-        model_id = os.environ["NUMERAI_MODEL_ID"]
         napi_auth = NumerAPI(
             public_id=os.environ["NUMERAI_PUBLIC_ID"],
             secret_key=os.environ["NUMERAI_SECRET_KEY"],
         )
         upload_id = napi_auth.model_upload(
-            "predict.pkl", model_id=model_id, data_version=DATA_VERSION
+            "predict.pkl", model_id=os.environ["NUMERAI_MODEL_ID"], data_version=DATA_VERSION
         )
         print(f"Uploaded. model_upload_id={upload_id}")
     else:
         print("Skipped upload. Re-run with --upload and NUMERAI_* env vars set.")
 
 
+def _era_wise_cv(train: pd.DataFrame, features: list[str], target: str) -> None:
+    """Walk-forward, era-atomic CV reporting mean per-era CORR + Sharpe."""
+    print("Running era-wise CV (walk-forward, purged)...")
+    df = train.dropna(subset=[target]).reset_index(drop=True)
+    splitter = cvmod.TimeSeriesSplitGroups(n_splits=4, purge=1)
+    fold_summaries = []
+    for k, (tr, te) in enumerate(splitter.split(df, groups=df["era"]), 1):
+        m = _lgbm()
+        m.fit(df.iloc[tr][features], df.iloc[tr][target])
+        preds = pd.Series(m.predict(df.iloc[te][features]), index=df.index[te])
+        scores = cvmod.era_scores(preds, df.iloc[te][target], df.iloc[te]["era"])
+        s = cvmod.summarize(scores)
+        fold_summaries.append(s)
+        print(f"  fold {k}: mean_corr={s['mean_corr']:.4f}  sharpe={s['sharpe']:.2f}  "
+              f"({s['n_eras']} eras)")
+    mean_corr = np.mean([s["mean_corr"] for s in fold_summaries])
+    mean_sharpe = np.mean([s["sharpe"] for s in fold_summaries])
+    print(f"CV summary: mean_corr={mean_corr:.4f}  mean_sharpe={mean_sharpe:.2f}")
+
+
 if __name__ == "__main__":
     ap = argparse.ArgumentParser()
     ap.add_argument("--upload", action="store_true", help="model-upload predict.pkl")
-    main(ap.parse_args().upload)
+    ap.add_argument("--cv", action="store_true", help="run era-wise CV and report")
+    args = ap.parse_args()
+    main(args.upload, args.cv)

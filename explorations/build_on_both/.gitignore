@@ -1,0 +1,5 @@
+resources/
+*.pkl
+__pycache__/
+v5.2/
+*.parquet

@@ -1,0 +1,9 @@
+# CrunchDAO structural-break starter.
+# crunch-cli is only needed locally to setup/test/push (not inside the runner).
+crunch-cli>=11.8.0
+numpy
+pandas
+scipy
+scikit-learn
+joblib
+lightgbm

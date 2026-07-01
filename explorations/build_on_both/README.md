@@ -39,10 +39,13 @@ source — otherwise you're doing data engineering, not modeling.
   Benchmark**. It extracts a **battery of two-sample before/after statistics** (KS,
   Mann–Whitney, Welch t, Levene, Wasserstein, energy distance, Anderson–Darling,
   Jensen–Shannon, autocorrelation/slope/variance shifts, CUSUM, spectral centroid
-  & low-band energy shifts, moment differences) and weights them with a **stacked
-  ensemble** (LightGBM + RandomForest + HistGradientBoosting → logistic
-  meta-learner). Stacking guards against any single base model overfitting one
-  distribution family — the exact failure mode the independent benchmark flagged.
+  & low-band energy shifts, moment differences, plus **wavelet multi-scale
+  energy-shift** features) and weights them with a **stacked ensemble** (XGBoost +
+  LightGBM + RandomForest + HistGradientBoosting → logistic meta-learner).
+  Stacking two distinct GBDT families guards against any single base model
+  overfitting one distribution family — the exact failure mode the independent
+  benchmark flagged. XGBoost, LightGBM and PyWavelets are all optional: the feature
+  vector keeps a fixed length and the ensemble degrades gracefully if any are absent.
 - `streaming_attacker.py` — a **`BreakAttacker`** for the separate $100k **Real-Time
   (streaming) edition**, where points arrive one at a time. It combines an online
   CUSUM with a conformal-style betting martingale into a monotone break score, and
@@ -61,7 +64,7 @@ to reach for a foundation model here — GBDT-on-features is the right tool.
 **Run it locally (works today, no account needed):**
 ```bash
 cd crunchdao_structural_break
-pip install numpy scipy scikit-learn pandas joblib   # lightgbm optional
+pip install numpy scipy scikit-learn pandas joblib   # xgboost, lightgbm, pywavelets optional
 python main.py               # batch detector: prints 5-fold CV + contract-check AUC
 python streaming_attacker.py # streaming detector self-test (pip install midone for real use)
 ```
@@ -77,12 +80,12 @@ crunch test            # local dry run against provided data
 crunch push -m "two-sample features + GBDT"
 ```
 
-**Improve from here (in rough ROI order):** add wavelet (PyWavelets) features and
-`tabpfn`-generated features (the 2nd-place solution used both); add XGBoost to the
-stack; tune regularization for the *worst* fold, not the mean (the benchmark's top
-models overfit and fell 5+ ranks on a second dataset); do SHAP-based feature
-selection. The streaming edition's `BreakAttacker` can be upgraded with a proper
-inductive conformal predictor fit on the reference window.
+**Improve from here (in rough ROI order):** *(XGBoost, wavelet features and the
+XGB+LGBM stack are already in `main.py`.)* Add `tabpfn`-generated features (the
+2nd-place solution used them); tune regularization for the *worst* fold, not the
+mean (the benchmark's top models overfit and fell 5+ ranks on a second dataset);
+do SHAP-based feature selection. The streaming edition's `BreakAttacker` can be
+upgraded with a proper inductive conformal predictor fit on the reference window.
 
 ---
 
@@ -110,10 +113,11 @@ NUMERAI_PUBLIC_ID=... NUMERAI_SECRET_KEY=... NUMERAI_MODEL_ID=... \
   python submit.py --upload
 ```
 
-**Improve from here:** tune neutralization proportion (~0.5–1.0) against **FNCv3**;
-add more targets to the blend; scale the LightGBM up (official large config:
-`n_estimators=20000, lr=0.001, max_depth=6, num_leaves=64, colsample_bytree=0.1`);
-weight the blend by validation Sharpe rather than equally.
+**Improve from here:** *(the blend is already weighted by each target's
+walk-forward validation Sharpe in `submit.py`.)* Tune neutralization proportion
+(~0.5–1.0) against **FNCv3**; add more targets to the blend; scale the LightGBM up
+(official large config: `n_estimators=20000, lr=0.001, max_depth=6, num_leaves=64,
+colsample_bytree=0.1`).
 
 ---
 

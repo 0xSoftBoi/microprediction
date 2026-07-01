@@ -66,6 +66,19 @@ def _base_estimators():
             force_row_wise=True, verbose=-1)))
     except Exception:
         pass
+    try:
+        from xgboost import XGBClassifier
+
+        # Regularized XGB — the 2nd base GBDT family the winning solutions used.
+        # Diversity between GBDT implementations helps the stack generalize across
+        # distribution families (the benchmark's key robustness finding).
+        estimators.insert(0, ("xgb", XGBClassifier(
+            n_estimators=400, learning_rate=0.03, max_depth=4,
+            subsample=0.8, colsample_bytree=0.8, min_child_weight=5,
+            reg_lambda=1.0, gamma=0.0, tree_method="hist",
+            random_state=0, n_jobs=-1, eval_metric="logloss")))
+    except Exception:
+        pass
     return estimators
 
 
@@ -100,7 +113,41 @@ FEATURE_NAMES = [
     "skew_diff", "kurt_diff", "tail_range_ratio",
     "acf1_diff", "slope_diff", "vol_shift", "cusum_max",
     "spec_centroid_diff", "lowband_frac_diff",
+    # Wavelet detail-energy shift per level (before vs after). Captures changes in
+    # multi-scale roughness/volatility structure that FFT centroid can miss.
+    # Zero when PyWavelets is unavailable (fixed vector length is preserved).
+    "wav_energy_diff_l1", "wav_energy_diff_l2", "wav_energy_diff_l3",
 ]
+
+_WAV_LEVELS = 3
+
+
+def _wavelet_energy_fracs(x: np.ndarray, levels: int = _WAV_LEVELS) -> np.ndarray:
+    """Fraction of signal energy in each of the first `levels` DWT detail bands.
+
+    Returns a length-`levels` vector (zeros if PyWavelets is missing or the
+    segment is too short). Energy fractions are scale-free, so differencing the
+    before/after vectors yields a clean multi-scale "roughness shift" signal.
+    """
+    out = np.zeros(levels, dtype=float)
+    if x.size < 2 ** (levels + 1):
+        return out
+    try:
+        import pywt
+
+        x = x - x.mean()
+        coeffs = pywt.wavedec(x, "db4", level=levels, mode="periodization")
+        details = coeffs[1:]  # skip the final approximation band
+        energies = np.array([float(np.dot(d, d)) for d in details])
+        total = energies.sum()
+        if total <= 0:
+            return out
+        fracs = energies / total  # ordered coarse->fine; reverse to l1=finest
+        fracs = fracs[::-1]
+        out[: fracs.size] = fracs[:levels]
+    except Exception:
+        pass
+    return out
 
 
 def _safe(x: float, default: float = 0.0) -> float:
@@ -239,6 +286,11 @@ def extract_features(dataset: pd.DataFrame) -> np.ndarray:
     cb, lb = _spectrum_stats(b)
     feats["spec_centroid_diff"] = _safe(cb - ca)
     feats["lowband_frac_diff"] = _safe(lb - la)
+
+    # Multi-scale (wavelet) energy shift, before vs after.
+    wav_diff = _wavelet_energy_fracs(b) - _wavelet_energy_fracs(a)
+    for i in range(_WAV_LEVELS):
+        feats[f"wav_energy_diff_l{i + 1}"] = _safe(wav_diff[i])
 
     return np.array([feats[k] for k in FEATURE_NAMES], dtype=float)
 

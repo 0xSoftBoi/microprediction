@@ -4,10 +4,12 @@ Numerai Classic — starter (download -> era-wise CV -> multi-target blend -> up
 What this does
 --------------
 1. Downloads the current v5 ("Atlas") data with numerapi (small feature set).
-2. Trains a LightGBM model per target and BLENDS them (rank-averaged) — this is
-   Numerai's own flagship pattern (`V5_LGBM_CT_BLEND` = Cyrus + Teager). Blending
-   across targets diversifies which residual return you predict and improves
-   out-of-sample consistency.
+2. Trains a LightGBM model per target and BLENDS them (rank-averaged, weighted by
+   each target's walk-forward validation Sharpe) — this is Numerai's own flagship
+   pattern (`V5_LGBM_CT_BLEND` = Cyrus + Teager), with Sharpe-weighting so a
+   consistently-better target dominates instead of being diluted by a noisier one.
+   Blending across targets diversifies which residual return you predict and
+   improves out-of-sample consistency.
 3. Optional feature neutralization (orthogonalize predictions vs features so you
    are rewarded for signal, not raw feature exposure).
 4. `--cv` runs proper ERA-WISE cross-validation (never random K-fold) and reports
@@ -70,25 +72,61 @@ def neutralize(predictions: pd.Series, features: pd.DataFrame, proportion: float
     return pd.Series(out, index=predictions.index)
 
 
-def _blend(models: dict, features_df: pd.DataFrame, features: list[str]) -> pd.Series:
-    """Rank-average predictions from each per-target model (ranks are all that count)."""
-    ranks = [
-        pd.Series(m.predict(features_df[features]), index=features_df.index).rank(pct=True)
-        for m in models.values()
-    ]
-    return sum(ranks) / len(ranks)
+def _blend(models: dict, features_df: pd.DataFrame, features: list[str],
+           weights: dict | None = None) -> pd.Series:
+    """Weighted rank-average of each per-target model (ranks are all that count).
+
+    `weights` maps target->weight; when None, all models weigh equally. Weighting
+    by validation Sharpe (see `_target_weights`) lets a consistently-better target
+    dominate the blend instead of being diluted by a noisier one.
+    """
+    keys = list(models.keys())
+    if weights is None:
+        weights = {k: 1.0 for k in keys}
+    wsum = sum(weights.get(k, 0.0) for k in keys) or float(len(keys))
+    blended = None
+    for k in keys:
+        r = pd.Series(models[k].predict(features_df[features]),
+                      index=features_df.index).rank(pct=True)
+        contrib = r * (weights.get(k, 0.0) / wsum)
+        blended = contrib if blended is None else blended + contrib
+    return blended
 
 
-def build_predict_fn(models: dict, features: list[str]):
+def build_predict_fn(models: dict, features: list[str], weights: dict | None = None):
     """Return the predict() function Numerai runs each round."""
 
     def predict(live_features: pd.DataFrame, live_benchmark_models: pd.DataFrame) -> pd.DataFrame:
-        blended = _blend(models, live_features, features)
+        blended = _blend(models, live_features, features, weights)
         if NEUTRALIZE_PROPORTION > 0:
             blended = neutralize(blended, live_features[features], NEUTRALIZE_PROPORTION)
         return blended.rank(pct=True).to_frame("prediction")
 
     return predict
+
+
+def _target_weights(train: pd.DataFrame, features: list[str], targets: list[str]) -> dict:
+    """Weight each target by its walk-forward validation Sharpe (clipped >=0).
+
+    Uses the LAST walk-forward split per target (cheap: one extra fit each) as an
+    out-of-sample proxy. Falls back to equal weights if no target scores positive.
+    """
+    if len(targets) == 1:
+        return {targets[0]: 1.0}
+    splitter = cvmod.TimeSeriesSplitGroups(n_splits=4, purge=1)
+    sharpes = {}
+    for tgt in targets:
+        df = train.dropna(subset=[tgt]).reset_index(drop=True)
+        tr, te = list(splitter.split(df, groups=df["era"]))[-1]
+        m = _lgbm()
+        m.fit(df.iloc[tr][features], df.iloc[tr][tgt])
+        preds = pd.Series(m.predict(df.iloc[te][features]), index=df.index[te])
+        s = cvmod.summarize(cvmod.era_scores(preds, df.iloc[te][tgt], df.iloc[te]["era"]))
+        sharpes[tgt] = max(s["sharpe"], 0.0)
+    total = sum(sharpes.values())
+    if total <= 0:
+        return {t: 1.0 / len(targets) for t in targets}
+    return {t: v / total for t, v in sharpes.items()}
 
 
 def _available_targets(path: str) -> list[str]:
@@ -117,6 +155,10 @@ def main(upload: bool, run_cv: bool) -> None:
     if run_cv:
         _era_wise_cv(train, features, targets[0])
 
+    print("Computing Sharpe-based blend weights (walk-forward validation)...")
+    weights = _target_weights(train, features, targets)
+    print("Blend weights: " + ", ".join(f"{t}={w:.3f}" for t, w in weights.items()))
+
     print(f"Training {len(targets)} model(s) on {len(features)} features...")
     models = {}
     for tgt in targets:
@@ -125,7 +167,7 @@ def main(upload: bool, run_cv: bool) -> None:
         m.fit(sub[features], sub[tgt])
         models[tgt] = m
 
-    predict = build_predict_fn(models, features)
+    predict = build_predict_fn(models, features, weights)
 
     sample = train[features].head(1000)
     demo = predict(sample, pd.DataFrame(index=sample.index))

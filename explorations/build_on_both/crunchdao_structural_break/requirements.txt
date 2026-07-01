@@ -7,5 +7,9 @@ scipy
 scikit-learn
 joblib
 lightgbm
+# Optional but recommended: second GBDT family for the stack + wavelet features.
+# The pipeline degrades gracefully (fixed feature length) if these are absent.
+xgboost
+PyWavelets
 # Optional: for streaming_attacker.py (Real-Time edition)
 # midone
